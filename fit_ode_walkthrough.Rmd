@@ -1,0 +1,281 @@
+---
+title: "Fitting ODEs in Stan"
+author: "Tara Hameed"
+output: 
+  html_document:
+    number_sections: true    
+    toc: true
+    toc_float: true
+bibliography: references.bib  
+date: "2025-11-15"
+mainfont: Arial
+documentclass: article
+geometry: margin=1in
+linestretch: 2
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+This script is intended to be an example of fitting Ordinary Differential Equation (ODE) models using RStan (R interface to Stan), where Stan is designed for Bayesian inference. A lot of the time when modelling we want to be able to quantify the uncertainty of our estimates. Bayesian inference allows us to do this in a principled manner for ODE models. All technical details mentioned here follow the Bayesian Data Analysis textbook [@gelman2013] and code examples follow advice given in the [Stan](https://mc-stan.org/docs/stan-users-guide/) [@Stan] user manual. For a more detailed explanation on fitting ODEs in Stan, please refer to the [RStan](https://mc-stan.org/rstan/) and [Stan](https://mc-stan.org/docs/stan-users-guide/) [@Stan] documentation and user manual.
+
+Before I go through the example, let's call in the relevant libraries and set a seed.
+```{r, message=FALSE}
+library(rstan)
+library(ghibli)
+library(tidybayes)
+library(tidyverse)
+library(kableExtra)
+seed <- 739485
+set.seed(seed)
+```
+
+The example in this script is about fitting a simple logistic ODE to some pre-generated fake data. First I outline what the simple ODE is ([The ODE]), what the fake data looks like ([Data]), how to fit the ODE to the data ([Fitting the model] and [Checking model fit]), and finally showcase exploring estimated parameters ([Estimated parameters]).
+
+# The ODE
+A simple logistic growth model [@verhulst1838] is a popular one-dimensional ODE that is often used  for modelling population growth:
+$$
+\frac{df}{dt} = \beta f \left( 1 - \frac{f}{K} \right)
+$$
+The mean population, $f$, grows over time, $t$, at a growth rate of $\beta$. Growth slows as the population reaches its theoretical limiting level, $K$, often called the carrying capacity.  
+
+# Data
+There is some pre-generated fake data in the `logistic_data.Rda` file, which is in the same repository as this script. The data was actually generated using the logistic model and Stan but, for the purposes of this example, we can assume/imagine that the data, $y$, is the concentration of a population growing over time, $t$, that was recorded in an experiment where we can assume that the data collection method introduces some observational noise. The aim is to fit the logistic ODE to this collected data, estimate important parameter values, like the growth rate $\beta$, and also quantify the uncertainty of the estimates. 
+
+## Visualisation 
+First, let's read in the data from the `logistic_data.Rda` file: 
+```{r}
+logistic_data <- readRDS(file="logistic_data.Rda")
+head(logistic_data) %>%  # only show part of the data
+  kable(format="html", table.attr = "style='width:30%;'") %>%
+  kable_styling("striped", full_width = F)
+```
+
+and then plot the data to explore what it looks like:
+```{r}
+logistic_data %>%
+  # specify time on the x-axis and data, y, on y-axis
+  ggplot(aes(x = time, y = y)) +    
+    # plot these points by adding the geom_point layer
+    geom_point(size=5, color=ghibli_palettes$SpiritedMedium[4]) +  
+    xlab("Time") +
+    theme_bw(base_size = 20)
+```
+
+## Pre-processing 
+Next, the dataframe needs to be re-formatted to be compatible with RStan because RStan expects the data to be in a particular format:
+```{r}
+# only want to solve the ODE at unique times in Stan to reduce runtime
+logistic_unique_times <- sort(unique(logistic_data$time))  
+# write a list of data that Stan needs to define the model 
+# using the same names in the "logistic.stan" file
+stan_logistic_data <- list(N = nrow(logistic_data),
+                           T = length(logistic_unique_times),
+                           y = logistic_data$y,
+                           time = logistic_unique_times,
+                           # match up observations with time in logistic_unique_times
+                           time_idx = match(logistic_data$time, logistic_unique_times),  
+                           include_likelihood = TRUE)
+head(stan_logistic_data) 
+```
+Although not relevant in this simple example, in the Stan model if there are multiple observations at one time point (like multiple replicates) the ODE is only solved once and so the data list is set up to reflect this. 
+
+# Fitting the Model {.tabset}
+
+## R code
+To fit the logistic ODE using Stan and estimate parameters, a Stan file needs to be created. One has already been created and is in this repository under the name `logistic.stan`. A copy of the file is on the "Stan code" tab so that you can easily refer to the relevant sections of the Stan model. 
+
+In the Stan file, the desired likelihood and priors can be specified. One of the simplest **likelihood**s to use is a Gaussian, where we assume that our data $y_t$ at time $t$ is normally distributed around our ODE solution, $f(t)$, with some noise that has scale $\sigma$:
+
+$$
+y_t \sim \mathcal{N}(f(t), \sigma)
+$$
+
+In the Stan file (`logistic.stan`, see "Stan code" tab), the above is written in the `model` block as follows, where `mu` is the ODE solution:
+```
+ y ~ normal(mu[time_idx, 1], sigma)
+```
+
+We can also assume the following **priors**: 
+$$
+\begin{align*}
+  K &\sim \mathcal{N}^+(10, 1) \\
+  \beta &\sim \mathcal{N}^+(0, 1) \\
+  \sigma &\sim \mathcal{N}^+(0, 1) \\
+  f_0 &\sim \mathcal{N}^+(0, 1)
+\end{align*}
+$$
+by writing the following in `logistic.stan`'s `model` block:
+
+```
+  K ~ normal(10, 1);
+  beta ~ std_normal();
+  sigma ~ std_normal();
+  y0 ~ std_normal();
+```
+
+These priors are chosen arbitrarily for this example but prior choice is important! Further information on choosing priors can be found in [@gelman2020] or [@gelman2013].
+
+Finally, to fit the model we only need to call the following command:
+```{r, results='hide'}
+fit_logistic <- stan("logistic.stan", data = stan_logistic_data, chains=4, seed=seed)
+```
+
+Here, I've hidden the output as it is long but RStan will output a progress bar of sampling from the posterior with the time taken for sampling given at the end of the output. Any warnings about convergence will also be given here.
+
+## Stan code
+In this tab is a copy of the `logistic.stan` file used to fit the Logistic ODE in the "R code" tab. It has six different "blocks": (**1**) `functions`, where the ODE is specified, (**2**) `data`, where the input data is specified (notice how the names in our list `stan_logistic_data` match this block), (**3**) `parameters` for the free parameters in the model, (**4**) `transformed parameters`, where we solve the ODE, (**5**) `model` that specifies the prior and likelihood and, finally, (**6**) `generated quantities`, where we simulate ODE solutions and model samples from the fitted model.
+
+```
+functions {
+  // Logistic ODE
+  vector logistic(real t,
+                  vector y,
+                  real beta,
+                  real K) {
+    vector[1] dydt;
+    dydt[1] = beta*y[1]*(1 - (y[1]/K));
+    return dydt;
+  }
+}
+data {
+  int<lower=0> N;  // number of data points
+  int<lower=0> T;  // number of time points 
+  vector[N] y;  // input data 
+  array[T] real time;  
+  int<lower=1, upper=T> time_idx[N];  // index of time vector in data 
+  int<lower=0, upper=1> include_likelihood; 
+}
+parameters {
+  real<lower=0> K;  // carrying capacity
+  real<lower=0> beta;   // growth rate
+  real<lower=0> y0;  // initial condition
+  real<lower=0> sigma;   // noise scale
+}
+transformed parameters {
+  // solve ODE
+  array[T-1] vector[1] mu_hat = ode_rk45(logistic, to_vector({y0}), time[1], time[2:T], beta, K);   
+  array[T] vector[1] mu;  // combine solved ODE with ICs
+  mu[1, 1] = y0;
+  mu[2:T, 1] = mu_hat[, 1];
+}
+model {
+  // priors
+  K ~ normal(10, 1);
+  beta ~ std_normal();
+  sigma ~ std_normal();
+  y0 ~ std_normal();
+  // likelihood
+  if (include_likelihood) y ~ normal(mu[time_idx, 1], sigma);  
+}
+generated quantities {
+  real f_reps[N] = mu[time_idx, 1];  // posterior samples of ode solution
+  real y_reps[N] = normal_rng(mu[time_idx, 1], sigma);  // posterior predictive 
+}
+
+```
+
+# Checking model fit 
+In the above `stan` command the keyword argument `chains` was set to be `chains=4` to specify that we want to run 4 chains independently. This is mainly done so that we can assess if the chains have converged to (what we assume to be) the true posterior distribution. 
+
+In reality, we cannot know if the chains have converged to the actual true posterior as we do not know what the true posterior is. Instead, signs of non-convergence are monitored. One way to do this is by plotting the posterior samples over iterations for each chain ("trace plot") to make sure that the chains are well **mixed** and **stationary**. The chains should all converge to the same posterior (be well *mixed*) and the chains should actually converge to a distribution and stay there (be *stationary*) [@gelman2013]. If the chains are not mixed or not stationary (like if the chains' sampling paths appear to be completely distinct or drift, for example) these are signs of non-convergence and samples taken from these chains should not be used further.
+
+```{r}
+traceplot(fit_logistic, pars=c("K", "beta", "y0", "sigma")) +
+  scale_color_manual(values=rev(ghibli_palettes$LaputaMedium))
+```
+
+The traceplots look OK. However, visual assessment can be subjective so convergence is also assessed using the Gelman-Rubin metric $\widehat{R}$ [@vehtari2021], which can be thought of as a numerical value summarising the above. Usually, a value of $\widehat{R}$ > 1.01 is a used as a heuristic to diagnose lack of convergence.
+
+```{r}
+summary(fit_logistic)$summary %>% 
+  head() %>%
+  kable(format="html", table.attr = "style='width:30%;'") %>%
+  kable_styling("striped", full_width = F)
+```
+
+The $\widehat{R}$ values listed in the last column of the above table look to be < 1.01!
+
+# Plotting model fit
+During fitting, it was assumed that the data, $y_t$, are normally distributed around the ODE solution, $f(t)$, with some noise that has scale, $\sigma$, at each time, $t$. Since there are no signs of non-convergence so far, we can plot posterior samples of ODE, $f(t)$, to explore if they are similar to the mean data and so check that our fitted model can at least visually capture the general trends of the data:
+```{r}
+#randomly draw 100 samples from the posterior
+sample_draws <- sample(1:4000, 100)  
+fit_logistic %>%
+  spread_draws(f_reps[rowid]) %>%
+  filter(.draw%in%sample_draws) %>%
+  full_join(rowid_to_column(logistic_data)) %>%
+  ggplot(aes(x = time, y = f_reps, group=.draw)) +
+    geom_line(alpha=0.3, linewidth=0.5, color=ghibli_palettes$SpiritedMedium[4]) +
+    geom_point(aes(y = y)) +
+    theme_bw(base_size = 20) +
+    ylab("f") +
+    xlab("t") 
+```
+
+Here, the dark purple lines are the ODE, $f$, that are solved using samples from the posterior, $p(\theta | y)$ and the dots show the data, $y$. 
+
+We can also plot samples from the posterior predictive distribution, $p(y^{\rm rep}| y)$, [@gelman2013]: 
+$$
+p(y^{\rm rep}| y) = \int p(y^{\rm rep}| \theta)p(\theta | y) d\theta
+$$
+
+to check how well our entire model, with assumed priors and likelihood, fits to the data. The fitted model should be able generate data under the posterior predictive distribution that resembles the observed data [@gelman2013]: 
+```{r}
+fit_logistic %>%
+  spread_draws(y_reps[rowid]) %>%
+  full_join(rowid_to_column(logistic_data)) %>%
+  ggplot(aes(x = time, y = y_reps)) +
+    stat_lineribbon() +
+    geom_point(aes(y = y)) +
+    theme_bw(base_size = 20) +
+    scale_fill_ghibli_d("PonyoMedium", direction=-1) +
+    ylab("f") +
+    xlab("t") 
+```
+
+Here, the level refers to the $100 \times$ level % credible interval of the posterior predictive distribution. The fit looks OK so far! For further information on visual checking of model fit please refer to [@gelman2020] or [@gabry2019].
+
+# Estimated parameters 
+Once the model has at least been visually compared to data as above, the posterior distribution of the parameters can be visualised. Since we have fit the model to its own fake data, we can also compare our inferred distributions to the true parameter values that were used to generate the fake data and hence check the validity of our parameter estimates:
+```{r}
+# read in true params
+logistic_true_params <- readRDS("true_logistic_params.Rda")
+# plot marginal posterior of parameters + true parameter values
+fit_logistic %>%
+  gather_draws(beta, sigma, y0) %>%
+  ggplot(aes(x = .value, y = .variable, fill=.variable)) +
+    theme_bw(base_size = 25) +
+    # plot estimated parameter values
+    stat_halfeye(color=ghibli_palettes$PonyoDark[5], .width = c(0.50, 0.95)) +
+    scale_fill_ghibli_d("PonyoMedium", direction=-1) +
+    # plot true parameter values
+    geom_point(data = logistic_true_params, shape=21, size=3, stroke=2, fill="white") +  
+    ylab("Value") +
+    xlab("Parameter") +
+    theme(legend.position="none")
+```
+
+Here, the estimated parameters are the shown distributions (brown dots are medians and thick and thin lines are 50% and 95% credible intervals) and the true parameter values are shown as white circles. It is good to check that the estimated 95% credible intervals include the true parameter values. 
+
+I didn't show `K` in the above plot or save it in `logistic_true_params` as it is on a different scale to the other parameters (making visualisation a little difficult) but you can add it to the `gather_draws` line if you want to visualise the estimate!
+
+# Further work
+The fake data that the ODE was fit to was actually generated using the `logistic.stan` model by taking a random sample from the prior predictive distribution, $p(y^{\rm rep}) = \int p(y^{\rm rep}| \theta)p(\theta) d\theta$ [@gelman2013]. Analysing the prior predictive distribution is a way of checking the choice of priors and generating and fitting to fake data is actually part of the usual model checking process [@gelman2020]. The idea is - if a model cannot fit to data that it itself has generated, then it will not be able to fit to the real data! 
+
+If you want to extend the above logistic example then the following suggestions would be a great place to start:
+
+- Notice how our fit to the data can be negative at early time points! This doesn't make sense since we are dealing with population growth. To fix this, try generating some new fake data from the model using a [lognormal](https://en.wikipedia.org/wiki/Log-normal_distribution) distribution for the likelihood and then fitting to this data using a lognormal likelihood. This is analoglous to assuming *multiplicative noise*, as opposed to *additive noise*, which was what we assumed above.
+
+- The priors are quite informative in this example (standard Gaussians), try changing the priors to be weakly informative (e.g. [Cauchy](https://en.wikipedia.org/wiki/Cauchy_distribution) distributions) to see how that changes your parameter inferences.
+
+- You can also try changing the time the data was observed or the scale of the noise and seeing how that changes your estimates.
+
+- Try fitting your own ODE!
+
+# References
+
+<div id="refs"></div>
