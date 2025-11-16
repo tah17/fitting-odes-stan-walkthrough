@@ -28,7 +28,7 @@ Rscript -e "renv::restore()"
 ```
 
 ## Usage
-The [`fit_ode_walkthrough.Rmd`](#fit_ode_walkthrough.Rmd) file is an R markdown file that contains the walkthrough on fitting an ODE using RStan. This file can be used to interactively run the code in the example. Alternatively, the rendered [`fit_ode_walkthrough.html`](#fit_ode_walkthrough.html) can instead be be used to read the walkthrough in a less interactiver manner using any browser. The [`fit_ode_walkthrough.Rmd`](#fit_ode_walkthrough.Rmd) and [`fit_ode_walkthrough.html`](#fit_ode_walkthrough.html) files use the following files provided in this repository: the Stan model ([`logistic.stan`](#logistic.stan)), previously generated fake data (`logistic_data.Rda`) and some of the parameters used to generate the fake data (`true_logistic_params.Rda`).
+The [`fit_ode_walkthrough.Rmd`](fit_ode_walkthrough.Rmd) file is an R markdown file that contains the walkthrough on fitting an ODE using RStan. This file can be used to interactively run the code in the example. Alternatively, the rendered [`fit_ode_walkthrough.html`](fit_ode_walkthrough.html) can instead be used to read the walkthrough in a less interactive manner using any browser. The [`fit_ode_walkthrough.Rmd`](fit_ode_walkthrough.Rmd) and [`fit_ode_walkthrough.html`](fit_ode_walkthrough.html) files use the following files provided in this repository: the Stan model ([`logistic.stan`](logistic.stan)), previously generated fake data (`logistic_data.Rda`) and some of the parameters used to generate the fake data (`true_logistic_params.Rda`).
 
 ## License
 Licensed under the MIT license. See [LICENSE](LICENSE) for more information.
